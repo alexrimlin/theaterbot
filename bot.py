@@ -1,83 +1,150 @@
 import telebot
-from telebot.types import KeyboardButton, User
 
 from time import sleep
+
 from logger import Logger
-import os
 
 import formatter
 from database import Database
-from markup import Markup
+from markup import Inline, Reply
 
+
+        
+token = ""
+while True:
+    try:
+        with open('token.txt', 'r') as f:
+            token = f.read()
+    except:
+        with open('token.txt', 'w') as f:
+            token = input("Enter your bot's token:\n")
+            f.write(token)
+    break
+
+
+db = Database 
+db._change("""
+        CREATE TABLE IF NOT EXISTS holders (
+            username text NOT NULL,
+            id integer NOT NULL UNIQUE,
+            role text,
+            props integer
+        )
+        """)
+db._change("""
+        CREATE TABLE IF NOT EXISTS props (
+            category integer NOT NULL,
+            name text NOT NULL,
+            photo TEXT,
+            holder text,
+            UNIQUE(category, name)
+        )
+        """)
+db._change("""
+           CREATE TABLE IF NOT EXISTS categories (
+               name text UNIQUE,
+               amount integer
+           )
+           """)
+
+if not db.has_admins():
+    while True:
+        try:
+            with open('admin.txt', 'r') as f:
+                admin_id = int(f.read())
+                db._change("DELETE FROM holders WHERE id=?", (admin_id,))
+                db._change("INSERT INTO holders VALUES(?,?,?,?)", ("empty", admin_id, "admin", 0))
+        except:
+            with open('admin.txt', 'w') as f:
+                admin = input("Enter the first admin's ID:\n")
+                f.write(admin)
+                continue
+        break
+        
+telebot.apihelper.ENABLE_MIDDLEWARE = True
+tb = telebot.TeleBot(token)    
+
+log = Logger()
+
+class Shortcut():
+    
+    @staticmethod
+    def overwrite(call, string, markup):
+        return tb.edit_message_text(string, call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+
+    @classmethod
+    def overwrite_prop(cls, prop, call, string, markup):
+        
+        if not prop[2]:
+            return cls.overwrite(call, string, markup)
+        else:
+            cls.purge_call(call)
+            return tb.send_message(call.message.chat.id, string, reply_markup=markup, parse_mode="HTML")
+
+    @staticmethod
+    def purge_call(call):
+        tb.delete_message(call.message.chat.id, call.message.message_id)
+        
+    @staticmethod
+    def purge_messages(msg):
+        try:
+            for message_id in range(msg.message_id, 0, -1):
+                tb.delete_message(msg.chat.id, message_id)
+        except: pass
+
+class Next_Step():
+    
+    @staticmethod
+    def add_photo(msg, prop):
+        try:
+            
+            file_id = msg.photo[-1].file_id
+            db.Prop.chpic(prop[1], file_id)
+            log.edit("@{} изменил фотографию [{}]|{}".format(msg.from_user.username, db.Prop.get_category_name(prop[0]), prop[1]))
+        
+            prop = db.Prop.get(prop[0], prop[4])
+            tb.send_photo(msg.chat.id, prop[2], formatter.prop(prop), parse_mode="HTML", reply_markup=Inline.prop_viewer(msg, prop))
+            Shortcut.purge_messages(msg)
+        except:
+            tb.send_message(msg.from_user.id, "Ошибка")
+            
+    @classmethod
+    def add_category(cls, msg):
+        
+        if msg.text != "отмена":
+            category = msg.text
+            
+            tb.send_message(msg.from_user.id, "Введите название реквизита", reply_markup=Reply.add_prop())
+            tb.register_next_step_handler(msg, cls.add_name, category)
+            
+        else:
+            tb.send_message(msg.from_user.id, formatter.title("Категории"), reply_markup=Inline.categories_list(msg), parse_mode="HTML")
+            Shortcut.purge_messages(msg)
+
+    @classmethod
+    def add_name(cls, msg, category):
+        
+        if msg.text != "отмена":
+            name = msg.text 
+            prop = [category, name, None, None]
+            db.Prop.add(*prop)
+            prop = db.Prop.get_by_name(category, name)
+            log.edit("@{} добавил [{}]|{}".format(msg.from_user.username, category, name))
+            tb.send_message(msg.from_user.id, formatter.prop(db.Prop.get(prop[0], prop[4])), 
+                            reply_markup=Inline.prop_viewer(msg, prop), parse_mode="HTML")
+        else:
+            props = db.Prop.get_all(category)
+            if props == []:
+                tb.send_message(msg.from_user.id, formatter.title("Категории"), reply_markup=Inline.categories_list(msg), parse_mode="HTML")
+            else:
+                tb.send_message(msg.from_user.id, formatter.title(db.Prop.get_category_name(category)), 
+                                reply_markup=Inline.category_viewer(msg, db.Prop.get_category_id(category)), parse_mode="HTML")
+            
+        Shortcut.purge_messages(msg)
 class Bot():
     
     def __init__(self):
-        
-        token = ""
-        while True:
-            try:
-                with open('token.txt', 'r') as f:
-                    token = f.read()
-            except:
-                with open('token.txt', 'w') as f:
-                    token = input("Enter your bot's token:\n")
-                    f.write(token)
-            break
-        
-        db = Database
-        db._change("""
-                CREATE TABLE IF NOT EXISTS holders (
-                    username text NOT NULL UNIQUE,
-                    id integer NOT NULL UNIQUE,
-                    role text,
-                    props integer
-                )
-                """)
-        db._change("""
-                CREATE TABLE IF NOT EXISTS props (
-                    category text NOT NULL,
-                    name text NOT NULL UNIQUE,
-                    photo TEXT UNIQUE,
-                    holder text
-                )
-                """)
-        
-        if not db.has_admins():
-            while True:
-                try:
-                    with open('admin.txt', 'r') as f:
-                        admin_id = int(f.read())
-                        db._change("DELETE FROM holders WHERE id=?", (admin_id,))
-                        db._change("INSERT INTO holders VALUES(?,?,?,?)", ("empty", admin_id, "admin", 0))
-                except:
-                    with open('admin.txt', 'w') as f:
-                        admin = input("Enter the first admin's ID:\n")
-                        f.write(admin)
-                        continue
-                break
-        
-        log = Logger()
-        
-        telebot.apihelper.ENABLE_MIDDLEWARE = True
-        tb = telebot.TeleBot(token)
-        tb.gateway = None
-
-
-        class Communicator():
-            @staticmethod
-            def send_prop(msg, prop):
-                message = None
-                if prop[2]:
-                    message = tb.send_photo(msg.from_user.id, prop[2], formatter.prop(prop), reply_markup=Markup.Prop.viewer(msg, prop), parse_mode="HTML")
-                else:
-                    message = tb.send_message(msg.from_user.id, formatter.prop(prop), reply_markup=Markup.Prop.viewer(msg, prop), parse_mode="HTML")
-                return message
-            def notify_keepers(msg, text):
-                keepers = db.User.get_keepers_ids()
-                for keeper_id in keepers:
-                    if keeper_id != msg.from_user.id:
-                        tb.send_message(keeper_id, text, parse_mode="MARKDOWN")  
-        
+        tb.gateway = None  
             
         # Checking the user
         @tb.middleware_handler(update_types=['message'])
@@ -90,9 +157,16 @@ class Bot():
             if not username:
                 if not tb.gateway:
                     tb.send_message(msg.from_user.id, "Доступ закрыт. Обратитесь к администратору.")
+                    tb.delete_message(msg.chat.id, msg.message_id)
                     msg.text = "deny_access"
                 else:
-                    Users.Add.join(msg)
+                    db.User.add(msg)
+                    string = "Пользователь {} получил доступ\n\n".format(msg.from_user.username)
+                    tb.answer_callback_query(tb.gateway.id, string, True)
+                    Shortcut.overwrite(tb.gateway, "Пользователи", Inline.user_list(tb.gateway))
+                    
+                    log.user("@" + db.User.get_username_by_id(tb.gateway.from_user.id) + " открыл доступ для @" + msg.from_user.username)
+                    tb.gateway = None
             else: 
                 #Update the db entry if the user has changed his/her username
                 if msg.from_user.username != username:
@@ -102,339 +176,294 @@ class Bot():
                 try:
                     msg.text = msg.text.lower()
                 except: pass
+                
 
-        class Menu():
             # Open menu if no command found
-            @tb.message_handler(func=lambda msg: msg.text != "deny_access")
+      
+        @tb.message_handler(func=lambda msg: msg.text != "deny_access")
+        def menu(msg):
+            tb.send_message(msg.from_user.id, formatter.title("Главное Меню") ,reply_markup=Inline.menu(msg), parse_mode="HTML")
+            Shortcut.purge_messages(msg)
             
-            def menu(msg):
-                msg = tb.send_message(msg.from_user.id, "Главное Меню", reply_markup=Markup.main(msg))
-                tb.register_next_step_handler(msg, Menu.choose, msg)
 
-            @staticmethod
-            
-            def choose(msg, me):
-                if msg.text == "реквизит":
-                    categories = db.Prop.get_categories()
-                    msg = tb.send_message(msg.from_user.id, formatter.categories(categories), reply_markup=Markup.addorback(msg), parse_mode="HTML")
-                    tb.register_next_step_handler(msg, Categories.choose, categories)
-                elif msg.text == "пользователи":
-                    msg = tb.send_message(msg.from_user.id, db.User.get_pretty_user_list(), reply_markup=Markup.Users.menu(msg), parse_mode="HTML")
-                    tb.register_next_step_handler(msg, Users.choose)
-                elif msg.text == "лог" and db.User.is_keeper(msg.from_user.username):
-                    msg = tb.send_message(msg.from_user.id, "Выберите тип Лога", reply_markup=Markup.log())
-                    tb.register_next_step_handler(msg, Log.choose)
-                else:
-                    tb.register_next_step_handler(msg, Menu.choose)
+        @staticmethod
+        @tb.callback_query_handler(func=lambda m: True)
+        def callback_handler(call):
+            path = call.data.split("_")
+            button = path[-1]
+            print("Call data: " + call.data)
         
-        class Log():
-            @classmethod
-            def choose(cls, msg):
-                if msg.text == "назад":
-                    Menu.menu(msg)
-                else:
-                    string = "Такого Лога не существует"
-                    if msg.text == "общий": string = log.get()
-                    elif msg.text == "админ": string = log.get("USER")
-                    elif msg.text == "передачи": string = log.get("PROP")
-                    elif msg.text == "реквизит": string = log.get("EDIT")
-                    
-                    msg = tb.send_message(msg.from_user.id, string)
-                    tb.register_next_step_handler(msg, cls.choose)
-                    
-
-        class Users():
+            #Return user's id and role if exists in the db
+            username = db.User.get_username_by_id(call.from_user.id)
             
-            @classmethod
+            #Check if the username is in the db
+            if not username:
+                tb.answer_callback_query(call.id, "Доступ закрыт. Обратитесь к администратору", True)
+                path = None
+            else: 
+                #Update the db entry if the user has changed his/her username
+                if call.from_user.username != username:
+                    db.User.update_username(call.from_user.id, call.from_user.username)
+            del(username)
             
-            def choose(cls, msg):
-                if msg.text == "назад":
-                    msg = tb.send_message(msg.from_user.id, "Возврат в меню", reply_markup=Markup.main(msg))
-                    tb.register_next_step_handler(msg, Menu.choose)
-                elif msg.text == "добавить пользователя" and db.User.is_admin(msg.from_user.username):
-                    if tb.gateway:
-                        msg = tb.send_message(msg.from_user.id, "Шлюз уже открыт @" + db.User.get_username_by_id(tb.gateway), reply_markup=Markup.Users.menu(msg))
-                        tb.register_next_step_handler(msg, cls.choose)
+            if not path: pass
+            elif len(path) == 1:
+                
+                if button == "cat":
+                    Shortcut.overwrite(call, formatter.title("Категории"), Inline.categories_list(call))
+                    
+                elif button == "us":
+                    Shortcut.overwrite(call, formatter.title("Пользователи"), Inline.user_list(call))
+                    
+                elif button == "log":
+                    Shortcut.overwrite(call, log.get(), Inline.log())
+                    
+                elif button == "per":
+                    Shortcut.overwrite(call, formatter.title("Мой Реквизит"), Inline.personal(call))
+                    
+            else:
+                
+                if path[0] == "log":
+                    
+                    if   button == "back":      Shortcut.overwrite(call, formatter.title("Главное Меню"), Inline.menu(call))
+                    elif button == "complete":  Shortcut.overwrite(call, log.get(), Inline.log())
+                    elif button == "user":      Shortcut.overwrite(call, log.get("USER"), Inline.log())
+                    elif button == "transfers": Shortcut.overwrite(call, log.get("PROP"), Inline.log())
+                    elif button == "props":     Shortcut.overwrite(call, log.get("EDIT"), Inline.log())
+                    
+                elif path[0] == "not": pass
+                    
+                elif path[0] == "per":
+                    
+                    if path[1] == "b":
+                        
+                        Shortcut.overwrite(call, formatter.title("Главное Меню"), Inline.menu(call))
+                        
                     else:
-                        tb.gateway = msg.from_user.id
-                        msg = tb.send_message(msg.from_user.id, "Чтобы добавить пользователя напишите боту с его аккаунта", reply_markup=Markup.cancel())
-                        tb.register_next_step_handler(msg, cls.Add.cancel)
-                else:
-                    try:
-                        if msg.text[0] in ['@', '/']: msg.text = msg.text[1:]
-                        user_info = db.User.get_entry_by_username(msg.text)
-                        if user_info == None: raise Exception("NoUserFound")
-                        cls.Menu.choose(msg, user_info)
-                    except:
-                        tb.register_next_step_handler(msg, cls.choose)
-            
-            class Add():
-                @classmethod
-                
-                def cancel(cls, msg):
-                    if tb.gateway:
-                        tb.gateway = None
-                        msg = tb.send_message(msg.from_user.id, db.User.get_pretty_user_list(), reply_markup=Markup.Users.menu(msg), parse_mode="HTML")
-                        tb.register_next_step_handler(msg, Users.choose)
-                
-                @classmethod
-                
-                def join(cls, msg):
-                    db.User.add(msg)
-                    Menu.menu(msg)
-                    
-                    msg = tb.send_message(tb.gateway, "Пользователь /{} получил доступ".format(msg.from_user.username), reply_markup=Markup.Users.menu(msg))
-                    tb.register_next_step_handler(msg, Users.choose)
-                    log.user("@" + db.User.get_username_by_id(tb.gateway) + " открыл доступ для @" + msg.from_user.username)
-                    tb.gateway = None
-
-        
-            class Menu():
-                @classmethod
-                
-                def choose(cls, msg, user_info):
-                    # Strip off the @ sign from the username
-                    if user_info:
-                        string = "@{} – ".format(user_info[0])
-                        if user_info[2] == "user": string += "Пользователь"
-                        elif user_info[2] == "keeper": string += "Хранитель"
-                        elif user_info[2] == "admin": string += "Админинстратор"
                         
+                        prop = db.Prop.get(path[1], path[2])
                         
-                        props = db.Prop.get_user(user_info[0])
-                        if user_info[3]: 
-                            string += formatter.user_props(props)
+                        if len(path) == 3:
+                                
+                            if not prop[2]:
+                                Shortcut.overwrite(call, formatter.prop(prop), Inline.personal_prop_viewer(prop))
+                            else:
+                                tb.send_photo(call.message.chat.id, prop[2], formatter.prop(prop), parse_mode="HTML", reply_markup=Inline.personal_prop_viewer(prop))
+                                Shortcut.purge_call(call)
                         
-                        msg = tb.send_message(msg.from_user.id, string, reply_markup=Markup.Users.viewer(msg, user_info), parse_mode="HTML")
-                        tb.register_next_step_handler(msg, cls.Options.choose, user_info, props)
-                    else:
-                        msg = tb.send_message(msg.from_user.id, "Никнейм не найден в базе данных")
-                        tb.register_next_step_handler(msg, cls.choose)
-                
-                class Options():
-                    @classmethod
-                    
-                    def choose(cls, msg, user_info, props):
-                        role = user_info[2]
-                        if msg.text == "кикнуть" and role == "user":
-                            msg = tb.send_message(msg.from_user.id, "Вы уверены, что хотите кикнуть пользователя @{}?".format(user_info[0]), reply_markup=Markup.yesorno())
-                            tb.register_next_step_handler(msg, cls.kick, user_info, props)
-                        elif msg.text == "назад":
-                            msg = tb.send_message(msg.from_user.id, db.User.get_pretty_user_list(), reply_markup=Markup.Users.menu(msg), parse_mode="HTML")
-                            tb.register_next_step_handler(msg, Users.choose)
-                        elif msg.text == "повысить" and role in ["user", "keeper"]:
-                            cls.promote(msg, user_info, props)
-                        elif msg.text == "понизить" and role in ["keeper", "admin"]:
-                            cls.demote(msg, user_info, props)
-                        elif msg.text[3:].isdigit():
-                            Categories.Props.choose(msg, props)
                         else:
-                            tb.register_next_step_handler(msg, cls.choose, user_info, props)
-
-                    @classmethod
-                    
-                    def kick(cls, msg, user_info, props):
-                        if msg.text == "да":
-                            db.User.kick(user_info[0])
-                            log.user("@" + msg.from_user.username + " кикнул @" + user_info[0])
-                            tb.send_message(user_info[1], "@{} удалил вас из базы данных".format(msg.from_user.username))
-                            msg = tb.send_message(msg.from_user.id, "Пользователь @{} удалён из базы данных".format(user_info[0]), reply_markup=Markup.Users.menu(msg))
-                            tb.register_next_step_handler(msg, Users.choose)
-                        else:
-                            msg = tb.send_message(msg.from_user.id, "Возврат в меню пользователя", reply_markup=Markup.Users.viewer(msg, user_info))
-                            tb.register_next_step_handler(msg, cls.choose, user_info, props)
-                        
-                    @classmethod
-                    
-                    def promote(cls, msg, user_info, props):
-                        promotion = db.User.promote(user_info)
-                        promotion = "хранителя" if promotion == "keeper" else "админинстратора"
-                        log.user("@" + msg.from_user.username + " повысил @" + user_info[0] + " до уровня " + promotion)
-                        user_info = db.User.get_entry_by_username(user_info[0])
-                        tb.send_message(msg.from_user.id, "@{} повышен до уровня {}".format(user_info[0], promotion), reply_markup=Markup.Users.viewer(msg, user_info))
-                        tb.send_message(user_info[1], "@{} повысил вас до уровня {}".format(msg.from_user.username, promotion))
-                        tb.register_next_step_handler(msg, cls.choose, user_info, props)
-
-                    @classmethod
-                    
-                    def demote(cls, msg, user_info, props):
-                        demotion = db.User.demote(user_info)
-                        demotion = "пользователя" if demotion == "user" else "хранителя"
-                        log.user("@" + msg.from_user.username + " понизил @" + user_info[0] + " до уровня " + demotion)
-                        user_info = db.User.get_entry_by_username(user_info[0])
-                        tb.send_message(msg.from_user.id, "@{} понижен до уровня {}".format(user_info[0], demotion), reply_markup=Markup.Users.viewer(msg, user_info))
-                        tb.send_message(user_info[1], "@{} понизил вас до уровня {}".format(msg.from_user.username, demotion))
-                        tb.register_next_step_handler(msg, cls.choose, user_info, props)
-                    
-        class Categories():
-            @classmethod
-            
-            def choose(cls, msg, categories):
-                if msg.text[3:].isdigit():
-                    cat_id = int(msg.text[3:])
-                    category = categories[cat_id]
-                    props = db.Prop.get_all(category)
-                    msg = tb.send_message(msg.from_user.id, formatter.props(props), reply_markup=Markup.addorback(msg), parse_mode="HTML")
-                    tb.register_next_step_handler(msg, cls.Props.choose, props)
-                elif msg.text == "назад":
-                    msg = tb.send_message(msg.from_user.id, "Возврат в меню", reply_markup=Markup.main(msg))
-                    tb.register_next_step_handler(msg, Menu.choose)
-                elif msg.text == "добавить" and db.User.is_keeper(msg.from_user.username):
-                    msg = tb.send_message(msg.from_user.id, "Введите название\n" + formatter.categories(categories), reply_markup=Markup.back(), parse_mode="HTML")
-                    tb.register_next_step_handler(msg, cls.Add.choose_category, categories)
-                else:
-                    msg = tb.send_message(msg.from_user.id, "Невернй ID категории")
-                    tb.register_next_step_handler(msg, cls.choose, db.Prop.get_categories())
-
-            class Add():
-                @classmethod
-                
-                def choose_category(cls, msg, categories):
-                    category = msg.text
-                    if msg.text[3:].isdigit():
-                        category = categories[int(msg.text[3:])]
-                    
-                    if msg.text != "назад":
-                        message = tb.send_message(msg.from_user.id, "Введите название реквизита", reply_markup=Markup.cancel())
-                        tb.register_next_step_handler(message, cls.choose_name, category)
-                    else:
-                        msg = tb.send_message(msg.from_user.id, formatter.categories(categories), reply_markup=Markup.addorback(msg), parse_mode="HTML")
-                        tb.register_next_step_handler(msg, Categories.choose, categories)
-                
-                @classmethod
-                
-                def choose_name(cls, msg, category):
-                    if msg.text != "отмена":
-                        name = msg.text 
-                        prop = (category, name, None, None)
-                        db.Prop.add(*prop)
-                        log.edit("@{} добавил [{}]|{}".format(msg.from_user.username, category, name))
-                        msg = Communicator.send_prop(msg, prop)
-                        tb.register_next_step_handler(msg, Categories.Props.view, prop)
-                    else:
-                        props = db.Prop.get_all(category)
-                        if props == []:
-                            categories = db.Prop.get_categories()
-                            msg = tb.send_message(msg.from_user.id, formatter.categories(categories), reply_markup=Markup.addorback(msg), parse_mode="HTML")
-                            tb.register_next_step_handler(msg, Categories.choose, db.Prop.get_categories())
-                        else:
-                            msg = tb.send_message(msg.from_user.id, formatter.props(props), reply_markup=Markup.addorback(msg), parse_mode="HTML")
-                            tb.register_next_step_handler(msg, Categories.Props.choose, props)
                             
+                            if button == "r":
+                                
+                                log.prop("@{} вернул [{}]|{}".format(prop[3], db.Prop.get_category_name(prop[0]), prop[1]))
+                                db.User.decrement(prop[3])
+                                db.Prop.chown(prop[1], None)
+                                
+                                tb.answer_callback_query(call.id, "Реквизит возвращён", True)
+                                
+                            Shortcut.overwrite_prop(prop, call, formatter.title("Мой Реквизит"), Inline.personal(call))
+                          
+                elif path[0] == "us":
                     
+                    if len(path) == 2 and button == "back":
+                        Shortcut.overwrite(call, formatter.title("Главное Меню"), Inline.menu(call))
                         
-
-
-            class Props():
-                @classmethod
-                
-                def choose(cls, msg, props):
-                    if msg.text[3:].isdigit():
-                        prop_id = int(msg.text[3:])
-                        prop = db.Prop.get(props[prop_id][1])
-                        message = Communicator.send_prop(msg, prop)
-                        tb.register_next_step_handler(message, cls.view, prop)
-                    elif msg.text == "назад":
-                        categories = db.Prop.get_categories()
-                        msg = tb.send_message(msg.from_user.id, formatter.categories(categories), reply_markup=Markup.addorback(msg), parse_mode="HTML")
-                        tb.register_next_step_handler(msg, Categories.choose, categories)
-                    elif msg.text == "добавить" and db.User.is_keeper(msg.from_user.username):
-                        msg = tb.send_message(msg.from_user.id, "Введите название реквизиты", reply_markup=Markup.cancel())
-                        tb.register_next_step_handler(msg, Categories.Add.choose_name, props[0][0])
+                    elif path[1] == "add":
+                        
+                        if len(path) == 2:
+                            
+                            if not tb.gateway:
+                                Shortcut.overwrite(call, "Чтобы добавить пользователя напишите боту с его аккаунта", Inline.cancel(call.data))
+                                
+                                tb.gateway = call
+                                
+                            else:
+                                tb.answer_callback_query(call.id, "Шлюз уже открыт @" + db.User.get_username_by_id(tb.gateway.from_user.id), True)
+                            
+                        else:
+                            if button == "c":
+                                Shortcut.overwrite(call, db.User.get_pretty_user_list(), Inline.user_list(call))
+                                tb.gateway = None
+                    
                     else:
-                        user = db.User.get_entry_by_username(msg.text[1:])
-                        if user:
-                            Users.Menu.choose(msg, user)
-                        else:
-                            msg = tb.send_message(msg.from_user.id, "Неверный ID реквизита")
-                            tb.register_next_step_handler(msg, cls.choose, props)
+                        
+                        if button == "back":
+                            Shortcut.overwrite(call, formatter.title("Пользователи"), Inline.user_list(call))
+                            
+                        else: 
+                            user = db.User.get_entry_by_username(path[1])
+                            props = db.Prop.get_user(user[0])
+                            
+                            if len(path) == 2:
+                                try:
+                                    user = db.User.get_entry_by_username(path[1])
+                                    props = db.Prop.get_user(user[0])
+                                    string = formatter.user(user, props)
+                                    
+                                    Shortcut.overwrite(call, string, Inline.user_viewer(call, user))
+                                    
+                                except Exception as e:
+                                    raise(e)
+                                    tb.answer_callback_query(call.id, "Никнейм не найден в базе данных", True)
+                            
+                            elif path[2] != "kick":
+                            
+                                if button == "promote":
+                                    promotion = db.User.promote(user)
+                                    promotion = "хранителя" if promotion == "keeper" else "админинстратора"
+                                    log.user("@" + call.from_user.username + " повысил @" + user[0] + " до уровня " + promotion)
+                                
+                                elif button == "demote":
+                                    demotion = db.User.demote(user)
+                                    demotion = "пользователя" if demotion == "user" else "хранителя"
+                                    log.user("@" + call.from_user.username + " понизил @" + user[0] + " до уровня " + demotion)
+                                    
+                                
+                                user = db.User.get_entry_by_username(user[0])
+                                Shortcut.overwrite(call, formatter.user(user, props), Inline.user_viewer(call, user))
+                            
+                            else:
+                                
+                                if button == "kick":
+                                    Shortcut.overwrite(call, "Вы уверены, что хотите кикнуть @" + user[0] + "?", Inline.confirm(call.data))
+                                    
+                                elif button == "yes":
+                                    db.User.kick(user[0])
+                                    tb.answer_callback_query(call.id, path[1] + " удалён из базы данных", True)
+                                    
+                                    Shortcut.overwrite(call, formatter.title("Пользователи"), Inline.user_list(call))
+                                    
+                                    log.user("@" + call.from_user.username + " кикнул @" + user[0])
+                                    
+                                elif button == "no":
+                                    user = db.User.get_entry_by_username(user[0])
+                                    Shortcut.overwrite(call, formatter.user(user, props), Inline.user_viewer(call, user))
 
-                @classmethod
-                
-                def view(cls, msg, prop):
-                    if msg.text == "назад":
-                        props = db.Prop.get_all(prop[0])
-                        msg = tb.send_message(msg.from_user.id, formatter.props(props), reply_markup=Markup.addorback(msg), parse_mode="HTML")
-                        tb.register_next_step_handler(msg, cls.choose, props)
-                    elif msg.text == "забрать" and not prop[3]:
-                        cls.take(msg, prop)
-                    elif msg.text == "вернуть" and (prop[3] == msg.from_user.username or db.User.is_keeper(msg.from_user.username)):
-                        cls.turn(msg, prop)
-                    elif msg.text == "удалить" and db.User.is_keeper(msg.from_user.username):
-                        msg = tb.send_message(msg.from_user.id, "Вы уверены?", reply_markup=Markup.yesorno())
-                        tb.register_next_step_handler(msg, cls.delete, prop)
-                    elif msg.text == "фото" and db.User.is_keeper(msg.from_user.username):
-                        msg = tb.send_message(msg.from_user.id, "Пришлите фото для этого реквизита", reply_markup=Markup.cancel())
-                        tb.register_next_step_handler(msg, cls.photo, prop)
-                    else: 
-                        user = db.User.get_entry_by_username(msg.text[1:])
-                        if user:
-                            Users.Menu.choose(msg, user)
-                        else:
-                            msg = tb.send_message(msg.from_user.id, "Ошибка")
-                            tb.register_next_step_handler(msg, cls.view, db.Prop.get(prop[1]))
-
-
-                @classmethod
-                
-                def take(cls, msg, prop):
-                    db.Prop.chown(prop[1], msg.from_user.username)
-                    log.prop("@{} забрал [{}]|{}".format(msg.from_user.username, prop[0], prop[1]))
-                    db.User.increment(msg.from_user.username)
-                    Communicator.notify_keepers(msg, "@{} забрал _[{}]_*{}*".format(msg.from_user.username, prop[0], prop[1]))
-                    prop = db.Prop.get(prop[1])  
-                    msg = Communicator.send_prop(msg, prop)
-                    tb.register_next_step_handler(msg, cls.view, prop)
-                
-                @classmethod
-                
-                def turn(cls, msg, prop):
-                    log.prop("@{} вернул [{}]|{}".format(prop[3], prop[0], prop[1]))
-                    db.User.decrement(prop[3])
-                    db.Prop.chown(prop[1], None)
-                    Communicator.notify_keepers(msg, "@{} вернул _[{}]_*{}*".format(prop[3], prop[0], prop[1]))
-                    prop = db.Prop.get(prop[1])
-                    msg = Communicator.send_prop(msg, prop)
-                    tb.register_next_step_handler(msg, cls.view, prop)
-
-                @classmethod
-                
-                def delete(cls, msg, prop):
-                    if msg.text == "да":
-                        db.Prop.delete(prop[1])
-                        log.edit("@{} удалил [{}]|{}".format(msg.from_user.username, prop[0], prop[1]))
-                        props = db.Prop.get_all(prop[0])
-                        if props != []:
-                            msg = tb.send_message(msg.from_user.id, formatter.props(props), reply_markup=Markup.addorback(msg), parse_mode="HTML")
-                            tb.register_next_step_handler(msg, Categories.Props.choose, props)
-                        else:
-                            categories = db.Prop.get_categories()
-                            msg = tb.send_message(msg.from_user.id, formatter.categories(categories), reply_markup=Markup.addorback(msg), parse_mode="HTML")
-                            tb.register_next_step_handler(msg, Categories.choose, categories)
+                elif path[0] == "cat":
+                    
+                    if path[1] == "back":
+                            
+                        Shortcut.overwrite(call, formatter.title("Главное Меню"), Inline.menu(call))
+                        
                     else:
-                        msg = Communicator.send_prop(msg, prop)
-                        tb.register_next_step_handler(msg, cls.view, prop)
                         
-                @classmethod
-                
-                def photo(cls, msg, prop):
-                    try:
-                        if msg.text != "отмена":
-                            file_id = msg.photo[-1].file_id
-                            db.Prop.chpic(prop[1], file_id)
-                            log.edit("@{} изменил фотографию [{}]|{}".format(msg.from_user.username, prop[0], prop[1]))
-                    
-                        prop = db.Prop.get(prop[1])
-                        msg = Communicator.send_prop(msg, prop)
-                        tb.register_next_step_handler(msg, cls.view, prop)
-                    except:
-                        msg = tb.send_message(msg.from_user.id, "Ошибка", reply_markup=Markup.cancel())
-                        tb.register_next_step_handler(msg, cls.photo, prop)
-                
-                
-                
-                    
+                        category = path[1]
                         
+                        if len(path) == 2:
+                            
+                            if button != "add":
+                                
+                                msg = Shortcut.overwrite(call, formatter.title(db.Prop.get_category_name(category)), Inline.category_viewer(call, category))
+                                
+                            else:
+                                
+                                tb.send_message(call.message.chat.id, "Введите название категории", reply_markup=Reply.add_category(), parse_mode="HTML")
+                                Shortcut.purge_call(call)
+                                tb.register_next_step_handler(call.message, Next_Step.add_category)
+                        
+                        elif path[2] == "back":
+                                
+                            Shortcut.overwrite(call, formatter.title("Категории"), Inline.categories_list(call))
+                            
+                        elif path[2] == "add":
+                            
+                            tb.send_message(call.from_user.id, "Введите название реквизита", reply_markup=Reply.add_prop())
+                            tb.register_next_step_handler(call.message, Next_Step.add_name, db.Prop.get_category_name(category))
+                            
+                        else:
+                            
+                            prop = db.Prop.get(path[1], path[2])
+                            
+                            if len(path) == 3:
+                                
+                                if not prop[2]:
+                                    Shortcut.overwrite(call, formatter.prop(prop), Inline.prop_viewer(call, prop))
+                                else:
+                                    tb.send_photo(call.message.chat.id, prop[2], formatter.prop(prop), parse_mode="HTML", reply_markup=Inline.prop_viewer(call, prop))
+                                    Shortcut.purge_call(call)
+                                    
+                            elif button == "b":
+                                
+                                Shortcut.overwrite_prop(prop, call, formatter.title(db.Prop.get_category_name(category)), Inline.category_viewer(call, category))
+                                
+                            elif button == "h":
+                                user = db.User.get_entry_by_username(prop[3])
+                                props = db.Prop.get_user(user[0])
+                                string = formatter.user(user, props)
+                                
+                                Shortcut.overwrite_prop(prop, call, string, Inline.user_viewer(call, user))
+                                    
+                            elif button == "t":
+                
+                                db.Prop.chown(prop[1], call.from_user.username)
+                                log.prop("@{} забрал [{}]|{}".format(call.from_user.username, db.Prop.get_category_name(prop[0]), prop[1]))
+                                db.User.increment(call.from_user.username)
+                                prop = db.Prop.get(path[1], prop[4])  
+                                if prop[2]:
+                                    tb.edit_message_caption(formatter.prop(prop), call.message.chat.id, call.message.message_id, 
+                                                            reply_markup=Inline.prop_viewer(call, prop), parse_mode="HTML")
+                                else:
+                                    Shortcut.overwrite(call, formatter.prop(prop), Inline.prop_viewer(call, prop))
+                                
+                                    
+                            elif button == "r":
+                                
+                                log.prop("@{} вернул [{}]|{}".format(prop[3], db.Prop.get_category_name(prop[0]), prop[1]))
+                                db.User.decrement(prop[3])
+                                db.Prop.chown(prop[1], None)
+                                prop = db.Prop.get(path[1], prop[4])
+                                if prop[2]:
+                                    tb.edit_message_caption(formatter.prop(prop), call.message.chat.id, call.message.message_id, 
+                                                            reply_markup=Inline.prop_viewer(call, prop), parse_mode="HTML")
+                                else:
+                                    Shortcut.overwrite(call, formatter.prop(prop), Inline.prop_viewer(call, prop))
+                                
+                                
+                            elif path[3] == "d":
+                                
+                                if len(path) == 4:
+                                    
+                                    tb.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=Inline.confirm(call.data))
+                                    
+                                elif button == "no":
+                                    tb.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=Inline.prop_viewer(call, prop))
+                                    
+                                elif button == "yes":
+                                    
+                                    category_name = db.Prop.get_category_name(prop[0])
+                                        
+                                    db.Prop.delete(prop[0], prop[4])
+                                    
+                                    log.edit("@{} удалил [{}]|{}".format(call.from_user.username, category_name, prop[1]))
+                                    
+                                    if prop[3]:
+                                        db.User.decrement(prop[3])
+                                        
+                                    if db.Prop.get_all(prop[0]):
+                                        Shortcut.overwrite_prop(prop, call, formatter.title(db.Prop.get_category_name(category)), Inline.category_viewer(call, category))
+                                        
+                                    else:
+                                        Shortcut.overwrite_prop(prop, call, formatter.title("Категории"), Inline.categories_list(call))
+                                        
+                            elif path[3] == "pic":
+                                
+                                if len(path) == 4:
+                                
+                                    msg = Shortcut.overwrite_prop(prop, call, "Пришлите фото для этого реквизита", Inline.cancel(call.data))
+                                    tb.register_next_step_handler(msg, Next_Step.add_photo, prop)
+                                    
+                                else:
+                                    
+                                    msg = None
+                                    if not prop[2]:
+                                        msg = Shortcut.overwrite_prop(prop, call, formatter.prop(prop), Inline.prop_viewer(call, prop))
+                                    else:
+                                        msg = tb.send_photo(call.message.chat.id, prop[2], formatter.prop(prop), 
+                                                            reply_markup=Inline.prop_viewer(call, prop), parse_mode="HTML")
+                                        Shortcut.purge_messages(call.message)
+                                    tb.register_next_step_handler(msg, menu)
+                        
+                          
         while True:
             exception_count = 0
             try:

@@ -137,29 +137,54 @@ class Database():
             return demotion
 
     class Prop():
-        @staticmethod
-        def add(name, category, photo, holder):
-            Database._change("INSERT INTO props VALUES(?,?,?,?)", (name, category, photo, holder))
+        @classmethod
+        def add(cls, category, name, photo, holder):
+            
+            if Database._query("SELECT * FROM categories WHERE name=?", (category,)):
+                
+                Database._change("UPDATE categories SET amount=(amount+1) WHERE name=?", (category,))
+                
+            else: Database._change("INSERT INTO categories VALUES(?, ?)", (category, 1))
+            
+            category_id = cls.get_category_id(category)
+                
+            Database._change("INSERT INTO props VALUES(?,?,?,?)", (category_id, name, photo, holder))
+                
 
         @staticmethod
         def get_categories():
-            result = Database._query("SELECT DISTINCT category FROM props")
-            result = [category[0] for category in result]
+            result = Database._query("SELECT name, amount, rowid FROM categories ORDER BY name DESC")
             return result
+        
+        @staticmethod
+        def get_category_name(ID):
+            try: return Database._query("SELECT name FROM categories WHERE rowid=?", (ID,))[0][0]
+            except: return None
+        
+        @staticmethod
+        def get_category_id(category):
+            try: return Database._query("SELECT rowid FROM categories WHERE name=?", (category,))[0][0]
+            except: return None
 
         @staticmethod
         def get_all(category):
-            result = Database._query("SELECT * FROM props WHERE category=?", (category,))
+            result = Database._query("SELECT name,photo,holder, rowid FROM props WHERE category=? ORDER BY name", (category,))
             return result
         
         @staticmethod
         def get_user(username):
-            result = Database._query("SELECT * FROM props WHERE holder=?", (username,))
+            result = Database._query("SELECT category, name, photo, rowid FROM props WHERE holder=? ORDER BY category,name", (username,))
             return result
 
         @staticmethod
-        def get(name):
-            result = Database._query("SELECT * FROM props WHERE name=?", (name,))[0]
+        def get(category, name):
+            result = Database._query("SELECT *, rowid FROM props WHERE (rowid=?) AND (category=?)", (name, category))[0]
+            return result
+        
+        @classmethod
+        def get_by_name(cls, category, name):
+            category = cls.get_category_id(category)
+            result = Database._query("SELECT *, rowid FROM props WHERE (name=?) AND (category=?)", (name, category))[0]
             return result
 
         @staticmethod
@@ -170,6 +195,12 @@ class Database():
         def chpic(name, photo_id):
             Database._change("UPDATE props SET photo=? WHERE name=?", (photo_id, name))
         
-        @staticmethod
-        def delete(name):
-            Database._change("DELETE FROM props WHERE name=?", (name,))
+        @classmethod
+        def delete(cls, category, name):
+            Database._change("DELETE FROM props WHERE rowid=? AND category=?", (name, category))
+            category = cls.get_category_name(category)
+            if not cls.get_all(category):
+                Database._change("DELETE FROM categories WHERE (name=?)", (category,))
+            else:
+                Database._change("UPDATE categories SET amount=(amount-1) WHERE name=?", (category,))
+            

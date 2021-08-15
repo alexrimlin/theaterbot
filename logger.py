@@ -1,9 +1,5 @@
 import sqlite3
 import datetime
-import inspect
-def get_func_name():
-    frame = inspect.currentframe()
-    return inspect.getframeinfo(frame).function
 class Logger():
     def __init__(self):
         
@@ -24,8 +20,13 @@ class Logger():
     #* Обобщённая запись в лог
     def _log(self, severity, text):
         print("[" + severity + "] " + text)
-        self.c.execute("INSERT INTO log VALUES(?,?,?)", (datetime.datetime.now(), severity, text))
-        self.conn.commit()
+        while True:
+            try:
+                self.c.execute("INSERT INTO log VALUES(?,?,?)", (datetime.datetime.now(), severity, text))
+                self.conn.commit()
+            except:
+                continue
+            break
         
     #* Действия с пользователями
     def user(self, text):
@@ -39,16 +40,22 @@ class Logger():
     def prop(self, text):
         self._log("PROP", text)
         
-    #* Очистка таблицы от старых записей (больше 12 дней)
+    #* Очистка таблицы от старых записей (больше 2 дней)
     def clear(self):
-        delta = datetime.datetime.now() + datetime.timedelta(days=-12)
-        self.c.execute("DELETE FROM log WHERE timestamp < ?", (delta,),)
-        self.conn.commit()
+        delta = datetime.datetime.now() + datetime.timedelta(days=-2)
+        
+        while True:
+            try:
+                self.c.execute("DELETE FROM log WHERE timestamp < ?", (delta,),)
+                self.conn.commit()
+            except:
+                continue
+            break
         
     #* Подчистить таблицу и вернуть читабельный лог
     def get(self, severity=None):
         
-        self.clear()
+        if not severity: self.clear()
         
         query = "SELECT * FROM log"
         if severity:
